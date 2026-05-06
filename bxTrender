@@ -1,0 +1,1221 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jan  7 14:11:14 2026
+
+@author: prince
+"""
+
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jan  7 12:00:32 2026
+Multi-Stock B-Xtrender Analysis
+
+@author: prince
+"""
+
+#Changes: remove plots which are not signal
+#Add OBV
+# add monthly BX trender - done
+# create a monthly signal list as well for summary symbol table - done
+# add weekly market bias
+# add details on when there is a weekly market bias touch zone with current price
+# add summary table on top - symbols + MWD signals - done
+# add timestamp of date generated - done
+# change background of weekly and daily - done
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+from pathlib import Path
+import requests
+from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.utils import ImageReader
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+from reportlab.platypus import Image as PlatypusImage  #  Rename to avoid conflict
+
+
+# ---------- helper indicators ----------
+def ema(series, length):
+    return series.ewm(span=length, adjust=False).mean()
+
+def rsi(series, length):
+    delta = series.diff()
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+
+    gain = pd.Series(gain, index=series.index)
+    loss = pd.Series(loss, index=series.index)
+
+    avg_gain = gain.ewm(alpha=1/length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/length, adjust=False).mean()
+
+    rs = avg_gain / avg_loss
+    rsi_val = 100 - (100 / (1 + rs))
+    return rsi_val
+
+def t3(series, length, b=0.7):
+    e1 = ema(series, length)
+    e2 = ema(e1, length)
+    e3 = ema(e2, length)
+    e4 = ema(e3, length)
+    e5 = ema(e4, length)
+    e6 = ema(e5, length)
+
+    c1 = -b**3
+    c2 = 3*b**2 + 3*b**3
+    c3 = -6*b**2 - 3*b - 3*b**3
+    c4 = 1 + 3*b + 3*b**2 + b**3
+
+    return c1*e6 + c2*e5 + c3*e4 + c4*e3
+
+# ---------- parameters from B-Xtrender Pine code ----------
+short_l1 = 5
+short_l2 = 20
+short_l3 = 5
+
+# ---------- Load symbols list or single CSV ----------
+
+def load_stock_data(csv_path):
+    """
+    Load stock data from either:
+    1. A single CSV with 'Symbol' column (first row) and data
+    2. Multiple individual CSV files listed in a symbols CSV
+    """
+    if csv_path.endswith('.csv'):
+        df_symbols = pd.read_csv(csv_path)
+        #df_symbols = pd.read_csv("C:/Users/princesh/Downloads/aap.csv")
+        
+        # Check if it's a single stock CSV or multi-stock list
+        if 'Symbol' in df_symbols.columns:
+            # Multi-stock: first row contains symbols
+            symbols = df_symbols['Symbol'].dropna().tolist()
+            print(f"Found {len(symbols)} symbols: {symbols}")
+            return symbols
+        else:
+            # Single stock CSV - treat as AAPL
+            print("Single stock CSV detected - processing as single symbol")
+            return ['AAPL']
+    else:
+        raise ValueError("Please provide a CSV file path")
+
+# ---------- Main processing function ----------
+def process_stock_data(symbol, data_path):
+    """Process single stock data and return processed DataFrame"""
+    try:
+        # Try to load from individual CSV first
+        #data_path = DATA_PATH
+        #symbol = "aapl"
+        csv_file = f"{data_path}/{symbol.lower()}.csv"
+        if os.path.exists(csv_file):
+            df = pd.read_csv(csv_file)
+        else:
+            # Fallback: try original AAPL path format
+            csv_file = f"C:/Users/princesh/Downloads/{symbol.lower()}.csv"
+            if os.path.exists(csv_file):
+                df = pd.read_csv(csv_file)
+            else:
+                print(f"Warning: Could not find data for {symbol}")
+                return None
+        
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values("Date").reset_index(drop=True)
+        close = df["Close"]
+        
+        # Compute B-Xtrender
+        short_term_raw = ema(close, short_l1) - ema(close, short_l2)
+        short_term_xtrender = rsi(short_term_raw, short_l3) - 50
+        df["shortTermXtrender"] = short_term_xtrender
+        df["maShortTermXtrender"] = t3(short_term_xtrender, 5)
+        
+        # Trading signals
+        bx = df["shortTermXtrender"]
+        bx_prev = bx.shift(1)
+        is_upward_momentum = bx > bx_prev
+        is_strong_downward = bx < bx_prev
+        is_positive_value = bx > 0
+        is_negative_value = bx < 0
+        
+        df['Signal'] = 0
+        #df.loc[(is_upward_momentum & is_positive_value), 'Signal'] = 1
+        #df.loc[(is_strong_downward & is_positive_value), 'Signal'] = -1
+        #new
+        df.loc[(is_upward_momentum & is_positive_value), 'Signal'] = 1 #HH
+        df.loc[(is_strong_downward & is_positive_value), 'Signal'] = 1 #LH
+        df.loc[(is_upward_momentum & is_negative_value), 'Signal'] = 1 #HL for negative numbers symbols flip as -2 is > -3
+        df.loc[(is_strong_downward & is_negative_value), 'Signal'] = -1 #LL
+        
+        
+        
+        
+        # Colors for histogram
+        is_up = bx > 0.0
+        is_down = bx < 0.0
+        is_rising = bx > bx_prev
+        is_falling = bx < bx_prev
+        
+        colors = np.where(
+            is_up & is_rising, "#00ff00",
+            np.where(is_up & is_falling, "#009900",
+                np.where(is_down & is_falling, "#ff0000",
+                    np.where(is_down & is_rising, "#990000", "#aaaaaa")
+                )
+            )
+        )
+        df["colors"] = colors
+        df["idx"] = range(len(df))
+        df['Symbol'] = symbol
+        
+        return df
+        
+    except Exception as e:
+        print(f"Error processing {symbol}: {e}")
+        return None
+
+def download_google_sheet(spreadsheet_id, timeframe, output_dir="C:/Users/princesh/Downloads/bxtrender/Data"):
+    """
+    Download entire Google Sheet (all tabs) as XLSX file
+    
+    Args:
+        spreadsheet_id (str): Google Sheet ID from public link
+        output_dir (str): Directory to save file
+        filename (str): Output filename (default: sheet.xlsx)
+    
+    Returns:
+        str: Full path to saved file
+    """
+    print(f" Downloading shhet for: {timeframe}")
+    print(f" Downloading shhet for: {spreadsheet_id}")
+    # Build export URL for entire workbook
+    html_url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=xlsx"
+    
+    # Download the file
+    response = requests.get(html_url)
+    response.raise_for_status()
+    
+    # Ensure output directory exists
+    if timeframe == "WEEKLY":
+        filename = "sheet_weekly.xlsx"
+    elif timeframe == "DAILY":  # or whatever your daily case is
+        filename = "sheet_daily.xlsx"
+    else:
+        filename = "sheet.xlsx"  # default
+
+
+        
+    output_path = Path(output_dir) / filename
+    output_dir_path = output_path.parent
+    #output_dir_path.mkdir(parents=True, exist_ok=True)
+    
+    # Save XLSX file (contains ALL sheets/tabs)
+    with open(output_path, "wb") as f:
+        f.write(response.content)
+    
+    print(f" Entire workbook saved: {output_path}")
+    return str(output_path)
+
+def save_sheets_as_csv(xlsx_path, data_path, skip_sheet="Main"):
+    data_path = Path(data_path)
+    #data_path.mkdir(parents=True, exist_ok=True)
+
+    sheets = pd.read_excel(xlsx_path, sheet_name=None, engine='openpyxl')
+
+    for sheet_name, df in sheets.items():
+        if sheet_name == skip_sheet:
+            continue
+
+        #  FIX: Convert date columns to readable strings
+        for col in df.columns:
+            if df[col].dtype == 'datetime64[ns]' or 'date' in col.lower():
+                df[col] = pd.to_datetime(df[col]).dt.strftime('%Y-%m-%d')
+                # Or use '%m/%d/%Y' or '%d-%m-%Y' based on your preference
+
+        safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in sheet_name)
+        csv_path = data_path / f"{safe_name}.csv"
+        
+        df.to_csv(csv_path, index=False, date_format='%Y-%m-%d')  # Extra safety
+        print(f"Saved sheet '{sheet_name}' -> {csv_path}")
+        
+        
+def get_ticker_symbols(data_path):
+    """
+    Scan DATA_PATH folder and extract ticker symbols from CSV filenames.
+    Assumes CSV files are named like: AAPL.csv, GOOGL.csv, MSFT.csv, etc.
+    """
+    data_path = Path(data_path)
+    
+    tickers = []
+    
+    # Get all CSV files in the folder
+    for csv_file in data_path.glob("*.csv"):
+        # Extract filename without .csv extension
+        ticker = csv_file.stem.upper()  # AAPL.csv -> AAPL
+        
+        # Optional: Filter out non-ticker-like names (e.g., skip "Main.csv")
+        if len(ticker) <= 5 and not ticker.startswith(("MAIN", "_", ".")):
+            tickers.append(ticker)
+    
+    return sorted(set(tickers))  # Remove duplicates, sort alphabetically
+
+def get_buy_signals(combined_df):
+    """
+    Find symbols with latest Signal == 1 (buy signal)
+    """
+    buy_signals = []
+    
+    # Group by Symbol and get the latest row for each
+    latest_rows = combined_df.loc[combined_df.groupby('Symbol')['Date'].idxmax()]
+    
+    # Filter for Signal == 1
+    buy_symbols = latest_rows[latest_rows['Signal'] == 1]['Symbol'].tolist()
+    
+    return buy_symbols
+
+def update_all_weekly_with_today(daily_folder, weekly_folder):
+    """
+    For every ticker CSV in daily folder, 
+    take its last row and add to matching ticker CSV in weekly folder.
+    """
+    
+    daily_path = Path(daily_folder)
+    weekly_path = Path(weekly_folder)
+    
+    # Get all ticker files from daily folder
+    daily_files = list(daily_path.glob("*.csv"))
+    
+    for daily_file in daily_files:
+        #daily_file = daily_files[0]
+        ticker = daily_file.stem  # filename without .csv
+        weekly_file = weekly_path / f"{ticker}.csv"
+        
+        # Skip if weekly file doesn't exist
+        if not weekly_file.exists():
+            print(f" Missing weekly file: {weekly_file}")
+            continue
+            
+        print(f" Updating {ticker}...")
+        
+        # Read daily and weekly
+        daily_df = pd.read_csv(daily_file)
+        weekly_df = pd.read_csv(weekly_file)
+        
+        # Convert Date to datetime
+        daily_df["Date"] = pd.to_datetime(daily_df["Date"])
+        weekly_df["Date"] = pd.to_datetime(weekly_df["Date"])
+        
+        # Get today's row from daily
+        today_row = daily_df.sort_values("Date").iloc[[-1]]
+        today_date = today_row["Date"].iloc[0]
+        
+        # Remove existing today row from weekly
+        weekly_df = weekly_df[weekly_df["Date"] != today_date]
+        
+        # Add today's row
+        weekly_df = pd.concat([weekly_df, today_row], ignore_index=True)
+        
+        # Sort by date
+        #weekly_df = weekly_df.sort_values("Date").reset_index(drop=True)
+        
+        # Save updated weekly file
+        weekly_df.to_csv(weekly_file, index=False)
+        print(f" {ticker} updated with today: {today_date.strftime('%Y-%m-%d')}")
+    
+    print(" All weekly files updated!")
+
+def create_monthly_from_daily(daily_folder, monthly_folder):
+    """
+    For every CSV in daily folder, create monthly data (month-end prices)
+    and save as ticker_monthly.csv in monthly folder.
+    """
+    
+    daily_path = Path(daily_folder)
+    monthly_path = Path(monthly_folder)
+    monthly_path.mkdir(exist_ok=True)  # Create folder if missing
+    
+    # Get all daily CSV files
+    daily_files = list(daily_path.glob("*.csv"))
+    
+    for daily_file in daily_files:
+        ticker = daily_file.stem  # "AAPL" from "AAPL.csv"
+        monthly_file = monthly_path / f"{ticker}.csv"
+        
+        print(f"Processing {ticker}...")
+        
+        # Read daily data
+        df = pd.read_csv(daily_file)
+        df["Date"] = pd.to_datetime(df["Date"])
+        
+        # Group by year-month, take LAST trading day of each month
+        df["year_month"] = df["Date"].dt.to_period("M")
+        monthly_df = df.sort_values("Date").groupby("year_month").tail(1)
+        
+        # Clean up and save
+        monthly_df = monthly_df[["Date", "Close"]].reset_index(drop=True)
+        monthly_df.to_csv(monthly_file, index=False)
+        
+        print(f" {ticker}: {len(monthly_df)} months → {monthly_file}")
+
+
+def create_15day_from_daily(daily_folder, fifteen_day_folder):
+    """
+    For every CSV in daily folder, create 15-day candle data (every 15 trading days)
+    and save as ticker_15day.csv in fifteen_day folder.
+    """
+    
+    daily_path = Path(daily_folder)
+    fifteen_day_path = Path(fifteen_day_folder)
+    fifteen_day_path.mkdir(exist_ok=True)  # Create folder if missing
+    
+    # Get all daily CSV files
+    daily_files = list(daily_path.glob("*.csv"))
+    
+    for daily_file in daily_files:
+        ticker = daily_file.stem  # "AAPL" from "AAPL.csv"
+        fifteen_file = fifteen_day_path / f"{ticker}.csv"
+        
+        print(f" Processing {ticker}...")
+        
+        # Read daily data
+        df = pd.read_csv(daily_file)
+        df["Date"] = pd.to_datetime(df["Date"])
+        
+        # Create 15-day groups: every 15 trading days
+        df["row_id"] = range(len(df))
+        df["period_15"] = df["row_id"] // 15
+        
+        # Take LAST trading day of each 15-day period
+        fifteen_df = df.sort_values("Date").groupby("period_15").tail(1)
+        
+        # Clean up and save (Date + Close)
+        fifteen_df = fifteen_df[["Date", "Close"]].reset_index(drop=True)
+        fifteen_df.to_csv(fifteen_file, index=False)
+        
+        print(f" {ticker}: {len(fifteen_df)} 15-day periods → {fifteen_file}")
+
+
+
+def market_bias_cerebr(
+    df: pd.DataFrame,
+    ha_len: int = 100,
+    ha_len2: int = 100,
+    osc_len: int = 7,
+) -> pd.DataFrame:
+    """
+    Market Bias (CEREBR) – Python implementation of the indicator logic
+    (no higher‑timeframe / no-repaint machinery, only same-timeframe math).
+
+    Parameters
+    ----------
+    df : DataFrame
+        Must contain columns: 'Open','High','Low','Close'.
+    ha_len : int
+        Period for the first EMA smoothing of OHLC.
+    ha_len2 : int
+        Period for the second EMA smoothing (Heikin Ashi smoothing).
+    osc_len : int
+        Period for EMA smoothing of the oscillator.
+
+    Returns
+    -------
+    DataFrame
+        Input df with added columns:
+        o_smooth, c_smooth, h_smooth, l_smooth
+        ha_close, ha_open, ha_high, ha_low
+        o2, c2, h2, l2
+        ha_avg
+        osc_bias, osc_smooth
+        sigcolor (as RGBA hex strings)
+        candle_color (bull/bear color for smoothed HA candles)
+    """
+
+    out = df.copy()
+
+    # --- 1) First EMA smoothing of OHLC (Pine: o,c,h,l) ---
+    o = out["Open"].ewm(span=ha_len, adjust=False).mean()
+    c = out["Close"].ewm(span=ha_len, adjust=False).mean()
+    h = out["High"].ewm(span=ha_len, adjust=False).mean()
+    l = out["Low"].ewm(span=ha_len, adjust=False).mean()
+
+    out["o_smooth"] = o
+    out["c_smooth"] = c
+    out["h_smooth"] = h
+    out["l_smooth"] = l
+
+    # --- 2) Heikin Ashi OHLC (Pine: haclose, haopen, hahigh, halow) ---
+    haclose = (o + h + l + c) / 4.0
+
+    # xhaopen in Pine = (o + c)/2, then haopen uses previous xhaopen and haclose
+    xhaopen = (o + c) / 2.0
+
+    haopen = np.full(len(out), np.nan)
+    # Pine: haopen = na(xhaopen[1]) ? (o + c)/2 : (xhaopen[1] + haclose[1]) / 2
+    # For bar 0, treat "na(xhaopen[1])" as true => use (o + c)/2 at index 0
+    haopen[0] = xhaopen.iloc[0]
+    for i in range(1, len(out)):
+        # previous xhaopen and haclose
+        haopen[i] = (xhaopen.iloc[i - 1] + haclose.iloc[i - 1]) / 2.0
+
+    haopen = pd.Series(haopen, index=out.index)
+
+    hahigh = pd.concat(
+        [
+            h,
+            haopen,
+            haclose
+        ],
+        axis=1
+    ).max(axis=1)
+    halow = pd.concat(
+        [
+            l,
+            haopen,
+            haclose
+        ],
+        axis=1
+    ).min(axis=1)
+
+    out["ha_close"] = haclose
+    out["ha_open"] = haopen
+    out["ha_high"] = hahigh
+    out["ha_low"] = halow
+
+    # --- 3) Second EMA smoothing on HA candles (Pine: o2, c2, h2, l2) ---
+    o2 = haopen.ewm(span=ha_len2, adjust=False).mean()
+    c2 = haclose.ewm(span=ha_len2, adjust=False).mean()
+    h2 = hahigh.ewm(span=ha_len2, adjust=False).mean()
+    l2 = halow.ewm(span=ha_len2, adjust=False).mean()
+
+    out["o2"] = o2
+    out["c2"] = c2
+    out["h2"] = h2
+    out["l2"] = l2
+
+    # --- 4) Bias average line (Pine: ha_avg) ---
+    ha_avg = (h2 + l2) / 2.0
+    out["ha_avg"] = ha_avg
+
+    # --- 5) Oscillator (Pine: osc_bias, osc_smooth, sigcolor) ---
+    osc_bias = 100.0 * (c2 - o2)
+    osc_smooth = osc_bias.ewm(span=osc_len, adjust=False).mean()
+
+    out["osc_bias"] = osc_bias
+    out["osc_smooth"] = osc_smooth
+
+    # Colors comparable to Pine defaults
+    col_bull = "#00FF00"  # lime
+    col_bear = "#FF0000"  # red
+
+    # Helper to emulate color.new(color, alpha) with RGBA hex
+    # alpha in Pine is 0–100 => 0–255 here
+    def color_new(base_hex: str, alpha_pine: int) -> str:
+        base_hex = base_hex.lstrip("#")
+        r = int(base_hex[0:2], 16)
+        g = int(base_hex[2:4], 16)
+        b = int(base_hex[4:6], 16)
+        a = int(round(255 * (1 - alpha_pine / 100.0)))
+        return f"#{r:02X}{g:02X}{b:02X}{a:02X}"
+
+    sigcolor = np.full(len(out), None, dtype=object)
+
+    for i in range(len(out)):
+        ob = osc_bias.iloc[i]
+        os_ = osc_smooth.iloc[i]
+
+        if np.isnan(ob) or np.isnan(os_):
+            sigcolor[i] = None
+            continue
+
+        if (ob > 0) and (ob >= os_):
+            sigcolor[i] = color_new(col_bull, 35)
+        elif (ob > 0) and (ob < os_):
+            sigcolor[i] = color_new(col_bull, 75)
+        elif (ob < 0) and (ob <= os_):
+            sigcolor[i] = color_new(col_bear, 35)
+        elif (ob < 0) and (ob > os_):
+            sigcolor[i] = color_new(col_bear, 75)
+        else:
+            sigcolor[i] = None
+
+    out["sigcolor"] = sigcolor
+
+    # Candle color for smoothed HA candles (Pine: col = o2 > c2 ? col_bear : col_bull)
+    candle_color = np.where(o2 > c2, col_bear, col_bull)
+    out["candle_color"] = candle_color
+
+    return out
+
+# safe formatting
+def format_price(value):
+    """Safely format price as $XXX.XX or N/A"""
+    if pd.isna(value) or value == 'N/A':
+        return "N/A"
+    try:
+        return f"${float(value):.2f}"
+    except (ValueError, TypeError):
+        return str(value)
+
+def format_delta(value):
+    """Safely format delta as XX.X% or N/A"""
+    if pd.isna(value) or value == 'N/A':
+        return "N/A"
+    try:
+        return f"{float(value):.1f}%"
+    except (ValueError, TypeError):
+        return str(value)
+    
+
+def create_enhanced_pdf_with_ath4(weekly_plots_folder, daily_plots_folder, monthly_plots_folder, biweekly_plots_folder, symbols_list, symbols_list_monthly, symbols_list_biweekly, symbols_list_weekly, symbols_list_daily, data_path, output_pdf="buy_signals_enhanced_report.pdf"):
+    """
+    Enhanced PDF: Adds ATH, Current Price, Delta % + Monthly/Weekly/Daily charts
+    """
+    
+    weekly_plots_folder = Path(weekly_plots_folder)
+    daily_plots_folder = Path(daily_plots_folder)
+    monthly_plots_folder = Path(monthly_plots_folder)  #  NEW PARAMETER
+    biweekly_plots_folder = Path(biweekly_plots_folder)  #  NEW PARAMETER
+    data_path = Path(data_path)
+    
+    #  READ Main sheet from sheet_daily.xlsx
+    main_sheet_path = data_path / "sheet_daily.xlsx"
+    main_df = pd.read_excel(main_sheet_path, sheet_name="Main")
+    
+    # Create ticker stats lookup
+    ticker_stats = {}
+    for _, row in main_df.iterrows():
+        ticker_raw = row['Ticker']
+        if pd.isna(ticker_raw) or str(ticker_raw).strip() == "":
+            continue
+        ticker = str(ticker_raw).upper().strip()
+        ticker_stats[ticker] = {
+            'Current': row.get('Current Stock Price', 'N/A'),
+            'ATH': row.get('ATH', 'N/A'),
+            'Delta': row.get('Delta', 'N/A')
+        }
+
+    pdf_path = data_path / output_pdf
+    doc = SimpleDocTemplate(str(pdf_path), pagesize=letter)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    
+    #  1. SUMMARY TABLE AT TOP (NEW)
+    # ---------- 1. SUMMARY TABLE (SIMPLE STRINGS - BULLETPROOF) ----------
+    all_tickers = sorted(list(set(symbols_list + [s.upper() for s in symbols_list_monthly])))
+    
+    print(f"DEBUG: Combined(monthly weekly bi-weekly)symbols_list = {symbols_list}")  # Debug
+    print(f"DEBUG: symbols_list_monthly = {symbols_list_monthly}")  # Debug
+    print(f"DEBUG: all_tickers = {all_tickers}")  # Debug
+    
+    # Simple string rows - NO Paragraphs
+    summary_data = [["Ticker", "Daily", "Weekly", "Bi-weekly", "Monthly"]]
+    
+    # Split YES/NO rows
+    yes_rows = []
+    no_rows = []
+    
+    
+    
+    """
+    #  1. REORDER ROWS FIRST (Green → Orange → Gray)
+    green_rows = []
+    orange_rows = []
+    gray_rows = []
+    
+    for ticker in all_tickers:
+        daily = "YES" if ticker in [s.upper() for s in symbols_list_daily] else "NO"
+        monthly = "YES" if ticker in [s.upper() for s in symbols_list_monthly] else "NO"
+        biweekly = "YES" if ticker in [s.upper() for s in symbols_list_biweekly] else "NO"
+        weekly = "YES" if ticker in [s.upper() for s in symbols_list_weekly] else "NO"
+        
+        row = [str(ticker), daily, weekly, biweekly, monthly]
+        
+        if monthly == "YES" and biweekly == "YES" and weekly == "YES" and daily == "YES":
+            green_rows.append(row)  # Both YES = Orange
+        elif monthly == "YES" and biweekly == "YES" and weekly == "YES":
+            orange_rows.append(row)   # Monthly only = Green  
+        else:
+            gray_rows.append(row)    # Everything else = Gray
+    
+    # Ordered: Green → Orange → Gray
+    summary_data = [["Ticker", "Daily", "Weekly", "Bi-weekly", "Monthly"]] + green_rows + orange_rows + gray_rows
+    
+    #  2. CREATE TABLE with ordered data
+    summary_table = Table(summary_data, colWidths=[2*inch, 2*inch, 2*inch])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 12),
+        ('FONTSIZE', (0,1), (-1,-1), 10),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+    ]))
+    
+    #  3. APPLY COLORS based on new row positions
+    for row_idx in range(1, len(summary_data)):
+        if row_idx <= len(green_rows):
+            # Green rows (top)
+            summary_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, row_idx), (-1, row_idx), colors.lightgreen)
+            ]))
+        elif row_idx <= len(green_rows) + len(orange_rows):
+            # Orange rows (middle)
+            summary_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, row_idx), (-1, row_idx), colors.orange)
+            ]))
+        else:
+            # Gray rows (bottom)
+            summary_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, row_idx), (-1, row_idx), colors.lightgrey)
+            ]))
+
+
+    
+    # Add to story
+    # Timestamp
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    # Header with timestamp in brackets
+    header_text = f"<b><font size=20>BUY SIGNALS SUMMARY</font></b> <i>[{timestamp}]</i>"
+    story.append(Paragraph(header_text, styles['Title']))
+    story.append(Spacer(1, 12))
+    story.append(summary_table)
+    story.append(Spacer(1, 25))
+    """
+    #  1. REORDER ROWS FIRST (Green → Orange → Gray)
+    green_rows = []
+    orange_rows = []
+    gray_rows = []
+    
+    for ticker in all_tickers:
+        daily = "YES" if ticker in [s.upper() for s in symbols_list_daily] else "NO"
+        weekly = "YES" if ticker in [s.upper() for s in symbols_list_weekly] else "NO"
+        biweekly = "YES" if ticker in [s.upper() for s in symbols_list_biweekly] else "NO"
+        monthly = "YES" if ticker in [s.upper() for s in symbols_list_monthly] else "NO"
+        
+        row = [str(ticker), daily, weekly, biweekly, monthly]  # Keep biweekly column
+        
+        # GREEN = ALL 4 timeframes YES
+        if daily == "YES" and weekly == "YES" and biweekly == "YES" and monthly == "YES":
+            green_rows.append(row)
+        # ORANGE = 3/4 YES (Weekly + Biweekly + Monthly)
+        elif weekly == "YES" and biweekly == "YES" and monthly == "YES":
+            orange_rows.append(row)   
+        else:
+            gray_rows.append(row)    
+    
+    # Ordered: Green → Orange → Gray
+    summary_data = [["Ticker", "Daily", "Weekly", "Bi-weekly", "Monthly"]] + green_rows + orange_rows + gray_rows
+    
+    #  2. CREATE TABLE with 5 columns (fixed colWidths)
+    summary_table = Table(summary_data, colWidths=[2*inch, 1.8*inch, 1.8*inch, 1.8*inch, 1.8*inch])
+    
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), 12),
+        ('FONTSIZE', (0,1), (-1,-1), 10),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+    ]))
+    
+    #  3. APPLY COLORS based on row positions
+    for row_idx in range(1, len(summary_data)):
+        if row_idx <= len(green_rows):
+            # GREEN rows (top) - ALL 4 timeframes
+            summary_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, row_idx), (-1, row_idx), colors.lightgreen)
+            ]))
+        elif row_idx <= len(green_rows) + len(orange_rows):
+            # ORANGE rows (middle) - 3/4 timeframes
+            summary_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, row_idx), (-1, row_idx), colors.orange)
+            ]))
+        else:
+            # GRAY rows (bottom)
+            summary_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, row_idx), (-1, row_idx), colors.lightgrey)
+            ]))
+    
+    # Add to story
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    header_text = f"<b><font size=20>BUY SIGNALS SUMMARY</font></b> <i>[{timestamp}]</i>"
+    story.append(Paragraph(header_text, styles['Title']))
+    story.append(Spacer(1, 12))
+    story.append(summary_table)
+    story.append(Spacer(1, 25))
+
+    
+    
+    
+    
+    # Process each symbol
+    for i, symbol in enumerate(symbols_list):
+        symbol = symbol.upper()
+        stats = ticker_stats.get(symbol, {'Current': 'N/A', 'ATH': 'N/A', 'Delta': 'N/A'})
+        
+        # 1. SYMBOL TITLE + STATS TABLE
+        story.append(Paragraph(f"<b><font size=22>{symbol}</font></b>", styles['Title']))
+        story.append(Spacer(1, 12))
+        
+        # Stats table
+        stats_table_data = [
+            ['Metric', 'Value'],
+            ['Current Price', format_price(stats['Current'])],
+            ['All-Time High', format_price(stats['ATH'])],
+            ['Delta from ATH', format_delta(stats['Delta'])]
+        ]
+        stats_table = Table(stats_table_data, colWidths=[1.5*inch, 2.5*inch])
+        stats_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.grey),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,0), 12),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 12),
+            ('BACKGROUND', (0,1), (-1,-1), colors.beige),
+            ('GRID', (0,0), (-1,-1), 1, colors.black)
+        ]))
+        story.append(stats_table)
+        story.append(Spacer(1, 15))
+        
+        #  2. MONTHLY CHART + BIWEEKLY CHARTS side-by-side (unchanged)
+        table_data = [[None, None]]
+        
+        #LEFT: MONTHLY
+        monthly_plot = monthly_plots_folder / f"{symbol}.png"
+        if monthly_plot.exists():
+            monthly_cell = [
+                Paragraph("<b>MONTHLY</b>", styles['Heading3']),
+                Spacer(1, 5),
+                PlatypusImage(str(monthly_plot), width=3.2*inch, height=2.5*inch)  # ✅ Fixed
+            ]
+        else:
+            monthly_cell = [Paragraph(f"<i>MONTHLY chart missing</i>", styles['Normal'])]
+        
+        # Right: BIWEEKLY
+        biweekly_plot = biweekly_plots_folder / f"{symbol}.png"
+        if biweekly_plot.exists():
+            biweekly_cell = [
+                Paragraph("<b>BIWEEKLY</b>", styles['Heading4']),
+                Spacer(1, 3),
+                PlatypusImage(str(biweekly_plot), width=3.2*inch, height=2.5*inch)
+            ]
+        else:
+            biweekly_cell = [Paragraph(f"<i>BIWEEKLY missing</i>", styles['Normal'])]
+        
+        table_data[0][0] = monthly_cell
+        table_data[0][1] = biweekly_cell
+        
+        table = Table(table_data, colWidths=[3.5*inch, 3.5*inch], rowHeights=[2.8*inch])
+        table.setStyle(TableStyle([
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('LEFTPADDING', (0,0), (-1,-1), 10),
+            ('RIGHTPADDING', (0,0), (-1,-1), 10),
+            ('TOPPADDING', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+            ('BACKGROUND', (0,0), (0,-1), colors.lightblue),
+            ('BACKGROUND', (1,0), (-1,-1), colors.lightblue),
+            ('BOX', (0,0), (-1,-1), 1.5, colors.black),
+        ]))
+        
+        story.append(table)
+        story.append(Spacer(1, 15))
+        
+        
+        
+        # 3. WEEKLY + DAILY CHARTS side-by-side (unchanged)
+        table_data = [[None, None]]
+        
+        # Left: WEEKLY
+        weekly_plot = weekly_plots_folder / f"{symbol}.png"
+        if weekly_plot.exists():
+            weekly_cell = [
+                Paragraph("<b>WEEKLY</b>", styles['Heading4']),
+                Spacer(1, 3),
+                PlatypusImage(str(weekly_plot), width=3.2*inch, height=2.5*inch)
+            ]
+        else:
+            weekly_cell = [Paragraph(f"<i>WEEKLY missing</i>", styles['Normal'])]
+        
+        # Right: DAILY
+        daily_plot = daily_plots_folder / f"{symbol}.png"
+        if daily_plot.exists():
+            daily_cell = [
+                Paragraph("<b>DAILY</b>", styles['Heading4']),
+                Spacer(1, 3),
+                PlatypusImage(str(daily_plot), width=3.2*inch, height=2.5*inch)
+            ]
+        else:
+            daily_cell = [Paragraph(f"<i>DAILY missing</i>", styles['Normal'])]
+        
+        table_data[0][0] = weekly_cell
+        table_data[0][1] = daily_cell
+        
+        table = Table(table_data, colWidths=[3.5*inch, 3.5*inch], rowHeights=[2.8*inch])
+        table.setStyle(TableStyle([
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('LEFTPADDING', (0,0), (-1,-1), 10),
+            ('RIGHTPADDING', (0,0), (-1,-1), 10),
+            ('TOPPADDING', (0,0), (-1,-1), 8),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+            ('BACKGROUND', (0,0), (0,-1), colors.lightblue),
+            ('BACKGROUND', (1,0), (-1,-1), colors.lightblue),
+            ('BOX', (0,0), (-1,-1), 1.5, colors.black),
+        ]))
+        
+        story.append(table)
+        story.append(Spacer(1, 10))
+        
+        # Page break every 2 symbols
+        if (i + 1) % 2 == 0 and i < len(symbols_list) - 1:
+            story.append(PageBreak())
+    
+    doc.build(story)
+    print(f" Enhanced PDF with MONTHLY/WEEKLY/DAILY charts: {pdf_path}")
+    return str(pdf_path)
+
+
+
+def close_bias(df: pd.DataFrame,len1: int = 33,len2: int = 8,band_mult: float = 8) -> pd.DataFrame:
+    """
+    Close-only market bias (no oscillator).
+
+    Inputs:
+        df      : must have column 'Close'
+        len1    : first EMA length on close
+        len2    : second EMA length on smoothed close
+        band_mult : width of band in units of ATR of the smoothed series (approx)
+
+    Outputs (added columns):
+        c1      : first EMA of Close
+        c2      : second EMA of c1  (bias core)
+        upper   : upper bias band
+        lower   : lower bias band
+        bias    : same as c2 (midline)
+        bias_color : 'bull' or 'bear' based on slope of bias
+    """
+
+    out = df.copy()
+
+    # 1) First smoothing
+    c1 = out["Close"].ewm(span=len1, adjust=False).mean()
+
+    # 2) Second smoothing (core bias line)
+    c2 = c1.ewm(span=len2, adjust=False).mean()
+
+    # 3) Band around bias: use EMA of abs dev from c2
+    abs_dev = (c1 - c2).abs()
+    dev_ema = abs_dev.ewm(span=len2, adjust=False).mean()
+
+    upper = c2 + band_mult * dev_ema
+    lower = c2 - band_mult * dev_ema
+
+    # 4) Bias direction from slope of c2
+    slope = c2.diff()
+    bias_color = np.where(slope > 0, "bull", "bear")
+
+    out["c1"] = c1
+    out["c2"] = c2
+    out["bias"] = c2
+    out["upper"] = upper
+    out["lower"] = lower
+    out["bias_color"] = bias_color
+
+    return out
+
+def close_bias_by_symbol(df: pd.DataFrame,
+                         len1: int = 50,
+                         len2: int = 50,
+                         band_mult: float = 1.5) -> pd.DataFrame:
+    """
+    Apply close_bias separately for each Symbol in a multi‑ticker DataFrame.
+    close_bias itself is unchanged; we just apply it group‑by‑group.
+    """
+    def _apply_bias(group: pd.DataFrame) -> pd.DataFrame:
+        # run your existing function on this ticker only
+        biased = close_bias(group, len1=len1, len2=len2, band_mult=band_mult)
+        return biased
+
+    # group by Symbol and apply, then stitch back together
+    out = (
+        df.sort_values(["Symbol", "Date"])     # keep order clean if you have Date
+          .groupby("Symbol", group_keys=False)
+          .apply(_apply_bias)
+    )
+    return out
+
+
+def analyze_timeframe(timeframe, SHEET_ID):
+    """
+    Complete analysis pipeline for WEEKLY or DAILY timeframe
+    """
+    # Config paths based on timeframe
+    #SHEET_ID = "1nPdkZx7CKQspIgHZoOOsGJG6qZUw5xMmQAkk7vzptRo"
+    #timeframe = "DAILY"
+    SPREADSHEET_ID = SHEET_ID
+    """
+    if timeframe == "WEEKLY":
+        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Weekly/")
+    else:  # DAILY or #MONTHLY
+        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Daily/")
+    
+    """
+
+    if timeframe == "MONTHLY":
+        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Monthly/")
+    elif timeframe == "WEEKLY":
+        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Weekly/")
+    elif timeframe == "15DAY":
+        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/15_Day/")
+    else:  # DAILY or default
+        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Daily/")
+
+    
+    
+    
+    PLOTS_FOLDER = Path.home() / "Downloads" / "bxtrender" / "plots"
+    #PLOTS_FOLDER.mkdir(parents=True, exist_ok=True)
+    
+    # Step 1: Download and save sheets as CSV
+    print(f"\n Downloading {timeframe} data...")
+    if timeframe in ["DAILY", "WEEKLY"]:
+        saved_path = download_google_sheet(SPREADSHEET_ID, timeframe)
+        save_sheets_as_csv(saved_path, DATA_PATH_TIMEFRAME)
+    else:  # MONTHLY or 15Day
+        print("Not downloading or saving csv for Monthly or 15Day timeframe here....as monthly created by daily")
+    
+    # create last date data for monthly files
+    daily_csv_path =  Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Daily/") 
+    weekly_csv_path = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Weekly/")
+    
+    
+    
+    
+    
+    
+    # create monthly and 15Day only after daily is created and not for weekly loop
+    if timeframe in ["DAILY"]:
+        
+        #add today's data to weekly file(as weekly candle only updates on Friday) - this way we can get weekly candle with today's data
+        update_all_weekly_with_today(daily_csv_path, weekly_csv_path)
+        
+        # Create Monthly files from Daily file - Not available on google sheets
+        DATA_PATH_MONTHLY = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Monthly/")  # Where individual stock CSVs are stored
+        monthly_csv_path = DATA_PATH_MONTHLY
+        create_monthly_from_daily(daily_csv_path, monthly_csv_path)
+        
+        # Create 15 day files from Daily data
+        DATA_PATH_15DAY = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/15_Day/")  # Where individual stock CSVs are stored
+        fifteen_day_data = DATA_PATH_15DAY
+        create_15day_from_daily(daily_csv_path, fifteen_day_data)
+    else:  # MONTHLY or 15Day
+        print("do nothing for Weekly timeframe")
+
+
+    # Step 2: Get ticker symbols
+    symbols = get_ticker_symbols(DATA_PATH_TIMEFRAME)
+    print(f"Found {len(symbols)} {timeframe} symbols")
+    
+    # Step 3: Process all stocks and generate signals
+    all_dataframes = []
+    all_signals = []
+    
+    for symbol in symbols:
+        print(f"Processing {symbol} ({timeframe})...")
+        #symbol = "AMD"
+        df_stock = process_stock_data(symbol, DATA_PATH_TIMEFRAME)
+        if df_stock is not None:
+            all_dataframes.append(df_stock)
+            buy_signals = df_stock[df_stock['Signal'] == 1]
+            sell_signals = df_stock[df_stock['Signal'] == -1]
+            all_signals.extend(buy_signals[['Date', 'Symbol', 'Close', 'Signal']].to_dict('records'))
+            all_signals.extend(sell_signals[['Date', 'Symbol', 'Close', 'Signal']].to_dict('records'))
+    
+    if not all_dataframes:
+        print(f"No {timeframe} data processed.")
+        exit()
+    
+    # Step 4: Combine data
+    combined_df = pd.concat(all_dataframes, ignore_index=True)
+    
+    # Step 4.5 - add market Bias:
+    #combined_df = close_bias(combined_df)
+    combined_df = close_bias_by_symbol(combined_df)
+    
+    # Step 5: Generate plots
+    print(f"📊 Generating {timeframe} plots...")
+    timeframe_plots_folder = PLOTS_FOLDER / timeframe
+    timeframe_plots_folder.mkdir(exist_ok=True)
+    
+    for symbol in combined_df['Symbol'].unique():
+        #symbol = "AMD"
+        symbol_df = combined_df[combined_df['Symbol'] == symbol].copy()
+        symbol_df = symbol_df[['Date', 'idx', 'Close', 'Signal', 'shortTermXtrender', 'bias', 'upper', 'lower', 'bias_color']].copy()
+        symbol_df['shortTermXtrender'] = symbol_df['shortTermXtrender'].fillna(0)
+        
+        # Plotting code (your existing code)
+        colors = ['green' if x > 0 else 'red' for x in symbol_df['shortTermXtrender']]
+        
+        fig, (ax_price, ax_signals, ax_hist) = plt.subplots(3, 1, sharex=True, figsize=(12, 10),
+                                                          gridspec_kw={"height_ratios": [2, 1, 1]})
+        
+        # Price plot
+        ax_price.plot(symbol_df["idx"], symbol_df["Close"], color="black", linewidth=1.5)
+        ax_price.set_title(f"{symbol} {timeframe} - Price, Signals, B-Xtrender")
+        ax_price.set_ylabel("Price")
+        
+        
+        # Bias band fill
+        ax_price.fill_between(symbol_df["idx"],symbol_df["lower"],symbol_df["upper"],color="lightgreen", alpha=0.25,label="Close Bias Band")
+        # Bias midline
+        ax_price.plot(symbol_df["idx"], symbol_df["bias"],color="green", linewidth=1.2, alpha=0.9, label="Bias")
+        ax_price.set_title(f"{symbol} {timeframe} - Price, Signals, B-Xtrender")
+        ax_price.set_ylabel("Price")
+        ax_price.legend(loc="upper left")
+        
+        
+        # Signals plot
+        buy_signals = symbol_df[symbol_df['Signal'] == 1]
+        sell_signals = symbol_df[symbol_df['Signal'] == -1]
+        ax_signals.scatter(buy_signals["idx"], buy_signals["Close"] * 1.02, 
+                          marker='^', color='green', s=100, label='BUY', zorder=5)
+        ax_signals.scatter(sell_signals["idx"], sell_signals["Close"] * 0.98, 
+                          marker='v', color='red', s=100, label='SELL', zorder=5)
+        ax_signals.plot(symbol_df["idx"], symbol_df["Close"], color="lightgray", linewidth=0.8, alpha=0.7)
+        ax_signals.axhline(y=symbol_df["Close"].mean(), color='blue', linestyle='--', alpha=0.5)
+        ax_signals.set_ylabel("Signals")
+        ax_signals.legend()
+        ax_signals.set_ylim(symbol_df["Close"].min() * 0.95, symbol_df["Close"].max() * 1.05)
+        
+        # Histogram
+        ax_hist.bar(symbol_df["idx"], symbol_df["shortTermXtrender"], color=colors, width=0.85,
+                   edgecolor="black", linewidth=0.8)
+        ax_hist.axhline(0, color="gray", linewidth=0.8)
+        ax_hist.set_ylabel("B-Xtrender")
+        ax_hist.set_xlabel("Bars")
+        
+        tick_step = max(len(symbol_df) // 10, 1)
+        ticks = symbol_df["idx"][::tick_step]
+        labels = symbol_df["Date"].dt.strftime("%Y-%m-%d")[::tick_step]
+        ax_hist.set_xticks(ticks)
+        ax_hist.set_xticklabels(labels, rotation=45, ha="right")
+        
+        plt.tight_layout()
+        plt.savefig(timeframe_plots_folder / f"{symbol}.png", dpi=300, bbox_inches="tight")
+        plt.close()
+    
+    # Usage with your dataframe
+    buy_signals = get_buy_signals(combined_df)
+    
+    
+    return combined_df, buy_signals
+
+
+def delete_csv_files_in_folders(DATA_PATH_WEEKLY, DATA_PATH_DAILY, DATA_PATH_MONTHLY, DATA_PATH_15DAY):
+    """Delete ALL CSV files in Weekly, Daily, and Monthly folders"""
+    
+    folders = [DATA_PATH_WEEKLY, DATA_PATH_DAILY, DATA_PATH_MONTHLY]
+    
+    total_deleted = 0
+    
+    for folder_path in folders:
+        folder = Path(folder_path)
+        
+        if not folder.exists():
+            print(f" Folder not found: {folder}")
+            continue
+            
+        # Get all CSV files
+        csv_files = list(folder.glob("*.csv"))
+        
+        print(f" {folder.name}: Found {len(csv_files)} CSV files")
+        
+        for csv_file in csv_files:
+            try:
+                csv_file.unlink()  # Delete file
+                print(f"  Deleted: {csv_file.name}")
+                total_deleted += 1
+            except Exception as e:
+                print(f"   Error deleting {csv_file.name}: {e}")
+        
+        print(f" {folder.name}: Cleared {len(csv_files)} files\n")
+    
+    print(f" TOTAL: {total_deleted} CSV files deleted across all folders!")
+
+
+
+
+
+# ---------- MAIN EXECUTION ----------
+if __name__ == "__main__":
+    # Update this path to your CSV file containing symbols
+    SYMBOLS_CSV_PATH = "C:/Users/princesh/Downloads/bxtrender/Data/symbols.csv"  # CSV with 'Symbol' column
+    DATA_PATH = "C:/Users/princesh/Downloads/bxtrender/Data/"  # Where individual stock CSVs are stored
+    DATA_PATH_WEEKLY = "C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Weekly/"  # Where individual stock CSVs are stored
+    DATA_PATH_DAILY = "C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Daily/"  # Where individual stock CSVs are stored
+    DATA_PATH_MONTHLY = "C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Monthly/"  # Where individual stock CSVs are stored
+    DATA_PATH_15DAY = "C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/15_Day/"  # Where individual stock CSVs are stored
+    
+    
+    # cleanup of folders
+    delete_csv_files_in_folders(DATA_PATH_WEEKLY, DATA_PATH_DAILY, DATA_PATH_MONTHLY, DATA_PATH_15DAY)
+    
+    # Data file resources
+    SPREADSHEET_ID_WEEKLY = "1cRJxFIgdk__pnfgFw5w_dyqb0OdlvjvuyvVruMrEgxI"
+    SPREADSHEET_ID_WEEKLY = "10o1BtTOc62MMkPBgxc979E1eLC_dtw1Ig3YpiRWssD4"
+    SPREADSHEET_ID_DAILY = "1nPdkZx7CKQspIgHZoOOsGJG6qZUw5xMmQAkk7vzptRo"
+    
+    
+    # Run analysis for both timeframes - do not change order as monthly saved first, daily saved, daily updates weekly, monthly created by daily
+    print(" WEEKLY ANALYSIS")
+    weekly_df, weekly_buy_signals = analyze_timeframe("WEEKLY", SPREADSHEET_ID_WEEKLY)
+    
+    print("\n DAILY ANALYSIS") 
+    daily_df, daily_buy_signals = analyze_timeframe("DAILY", SPREADSHEET_ID_DAILY)
+    
+    print("\n MONTHLY ANALYSIS") 
+    monthly_df, monthly_buy_signals = analyze_timeframe("MONTHLY", SPREADSHEET_ID_DAILY)
+    
+    print("\n 15DAY ANALYSIS") 
+    biweekly_df, biweekly_buy_signals = analyze_timeframe("15DAY", SPREADSHEET_ID_DAILY)
+    
+    print(f"\n SUMMARY:")
+    print(f"WEEKLY Buy Signals: {weekly_buy_signals}")
+    print(f"DAILY Buy Signals: {daily_buy_signals}")
+    
+    
+    
+    combined_buy_signals = list(set(monthly_buy_signals) & set(weekly_buy_signals) & set(biweekly_buy_signals))
+    print(f" Combined report Symbols(BUY): {combined_buy_signals}")
+    if combined_buy_signals:
+        PLOTS_FOLDER = Path.home() / "Downloads" / "bxtrender" / "plots"
+        weekly_plots = PLOTS_FOLDER / "Weekly"
+        daily_plots = PLOTS_FOLDER / "Daily"
+        monthly_plots = PLOTS_FOLDER / "Monthly"
+        biweekly_plots = PLOTS_FOLDER / "15DAY"
+        
+        #  Enhanced PDF with ATH + charts
+        #pdf_path = create_enhanced_pdf_with_ath3(weekly_plots, daily_plots, combined_buy_signals, DATA_PATH)
+        pdf_path = create_enhanced_pdf_with_ath4(weekly_plots, daily_plots, monthly_plots, biweekly_plots, combined_buy_signals, monthly_buy_signals, biweekly_buy_signals, weekly_buy_signals, daily_buy_signals, DATA_PATH)
+        
+        print(f" Combined report: {pdf_path}")
+    else:
+        print("No symbols with buy signals in BOTH weekly AND daily timeframes")
+    
+    
+# Calculate CEREBR
+#df_cerebr = mb = market_bias_cerebr(df, ha_len=100, ha_len2=100, osc_len=7)  
+   
+    
+    
