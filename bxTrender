@@ -89,7 +89,7 @@ def load_stock_data(csv_path):
     """
     if csv_path.endswith('.csv'):
         df_symbols = pd.read_csv(csv_path)
-        #df_symbols = pd.read_csv("C:/Users/princesh/Downloads/aap.csv")
+        #df_symbols = pd.read_csv("C:/Users/prince/Downloads/aap.csv")
         
         # Check if it's a single stock CSV or multi-stock list
         if 'Symbol' in df_symbols.columns:
@@ -116,7 +116,7 @@ def process_stock_data(symbol, data_path):
             df = pd.read_csv(csv_file)
         else:
             # Fallback: try original AAPL path format
-            csv_file = f"C:/Users/princesh/Downloads/{symbol.lower()}.csv"
+            csv_file = f"C:/Users/prince/Downloads/{symbol.lower()}.csv"
             if os.path.exists(csv_file):
                 df = pd.read_csv(csv_file)
             else:
@@ -177,7 +177,7 @@ def process_stock_data(symbol, data_path):
         print(f"Error processing {symbol}: {e}")
         return None
 
-def download_google_sheet(spreadsheet_id, timeframe, output_dir="C:/Users/princesh/Downloads/bxtrender/Data"):
+def download_google_sheet(spreadsheet_id, timeframe, output_dir="C:/Users/prince/Downloads/bxtrender/Data"):
     """
     Download entire Google Sheet (all tabs) as XLSX file
     
@@ -966,20 +966,20 @@ def analyze_timeframe(timeframe, SHEET_ID):
     SPREADSHEET_ID = SHEET_ID
     """
     if timeframe == "WEEKLY":
-        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Weekly/")
+        DATA_PATH_TIMEFRAME = Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Weekly/")
     else:  # DAILY or #MONTHLY
-        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Daily/")
+        DATA_PATH_TIMEFRAME = Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Daily/")
     
     """
 
     if timeframe == "MONTHLY":
-        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Monthly/")
+        DATA_PATH_TIMEFRAME = Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Monthly/")
     elif timeframe == "WEEKLY":
-        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Weekly/")
+        DATA_PATH_TIMEFRAME = Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Weekly/")
     elif timeframe == "15DAY":
-        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/15_Day/")
+        DATA_PATH_TIMEFRAME = Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/15_Day/")
     else:  # DAILY or default
-        DATA_PATH_TIMEFRAME = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Daily/")
+        DATA_PATH_TIMEFRAME = Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Daily/")
 
     
     
@@ -996,8 +996,8 @@ def analyze_timeframe(timeframe, SHEET_ID):
         print("Not downloading or saving csv for Monthly or 15Day timeframe here....as monthly created by daily")
     
     # create last date data for monthly files
-    daily_csv_path =  Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Daily/") 
-    weekly_csv_path = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Weekly/")
+    daily_csv_path =  Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Daily/") 
+    weekly_csv_path = Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Weekly/")
     
     
     
@@ -1011,12 +1011,12 @@ def analyze_timeframe(timeframe, SHEET_ID):
         update_all_weekly_with_today(daily_csv_path, weekly_csv_path)
         
         # Create Monthly files from Daily file - Not available on google sheets
-        DATA_PATH_MONTHLY = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Monthly/")  # Where individual stock CSVs are stored
+        DATA_PATH_MONTHLY = Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Monthly/")  # Where individual stock CSVs are stored
         monthly_csv_path = DATA_PATH_MONTHLY
         create_monthly_from_daily(daily_csv_path, monthly_csv_path)
         
         # Create 15 day files from Daily data
-        DATA_PATH_15DAY = Path("C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/15_Day/")  # Where individual stock CSVs are stored
+        DATA_PATH_15DAY = Path("C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/15_Day/")  # Where individual stock CSVs are stored
         fifteen_day_data = DATA_PATH_15DAY
         create_15day_from_daily(daily_csv_path, fifteen_day_data)
     else:  # MONTHLY or 15Day
@@ -1160,12 +1160,12 @@ def delete_csv_files_in_folders(DATA_PATH_WEEKLY, DATA_PATH_DAILY, DATA_PATH_MON
 # ---------- MAIN EXECUTION ----------
 if __name__ == "__main__":
     # Update this path to your CSV file containing symbols
-    SYMBOLS_CSV_PATH = "C:/Users/princesh/Downloads/bxtrender/Data/symbols.csv"  # CSV with 'Symbol' column
-    DATA_PATH = "C:/Users/princesh/Downloads/bxtrender/Data/"  # Where individual stock CSVs are stored
-    DATA_PATH_WEEKLY = "C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Weekly/"  # Where individual stock CSVs are stored
-    DATA_PATH_DAILY = "C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Daily/"  # Where individual stock CSVs are stored
-    DATA_PATH_MONTHLY = "C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/Monthly/"  # Where individual stock CSVs are stored
-    DATA_PATH_15DAY = "C:/Users/princesh/Downloads/bxtrender/Data/csv_stock_data/15_Day/"  # Where individual stock CSVs are stored
+    SYMBOLS_CSV_PATH = "C:/Users/prince/Downloads/bxtrender/Data/symbols.csv"  # CSV with 'Symbol' column
+    DATA_PATH = "C:/Users/prince/Downloads/bxtrender/Data/"  # Where individual stock CSVs are stored
+    DATA_PATH_WEEKLY = "C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Weekly/"  # Where individual stock CSVs are stored
+    DATA_PATH_DAILY = "C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Daily/"  # Where individual stock CSVs are stored
+    DATA_PATH_MONTHLY = "C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/Monthly/"  # Where individual stock CSVs are stored
+    DATA_PATH_15DAY = "C:/Users/prince/Downloads/bxtrender/Data/csv_stock_data/15_Day/"  # Where individual stock CSVs are stored
     
     
     # cleanup of folders
